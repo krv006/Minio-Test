@@ -1,32 +1,19 @@
-from minio import Minio
+import os
+import boto3
+from botocore.client import Config
 
-""" This is the code for Connection to the Minio Server 
-    This is The Client Information & Connection to the Minio server
-    """
-
-client = Minio(
-    endpoint="minio-cdn.uzex.uz",
-    access_key="cotton",
-    secret_key="xV&q+8AHHXBSK}",
-    secure=False,
+s3 = boto3.resource(
+    's3',
+    endpoint_url='https://minio-cdn.uzex.uz',
+    aws_access_key_id='cotton',
+    aws_secret_access_key='xV&q+8AHHXBSK}',
+    config=Config(signature_version='s3v4'),
+    region_name='us-east-1'
 )
-""" This code will make connection to the Ninio Server with Python Now you are Ready 
-To Create a Buckets & onjects """
 
-try:
-    if client.bucket_exists("image"):
-        image = r'Templates/f794b5cf-d399-4d32-a0eb-fa4e32683551/2025/05/08/50baf5aecac149c180e797ee83aee850'
-        destination = "information" + "/" + "myfile.jpg"
-        client.fput_object(
-            "image", destination, image
-        )
-    else:
-        client.make_bucket("image")
-        image = r'Templates/f794b5cf-d399-4d32-a0eb-fa4e32683551/2025/05/08/50baf5aecac149c180e797ee83aee850'
-        destination = "information" + "/" + "myfile.jpg"
-        client.fput_object(
-            "image", destination, image
-        )
+bucket_name = 'cotton'
+object_key = 'Records/ca84910d-470a-4ac6-0e66-08dd96cf2567/2025.05.20/ceb4bc7eafcb4092a03eb37899dd9fbf'
+local_path = 'krv_test.xlsx'
 
-except Exception as e:
-    print(e)
+s3.Bucket(bucket_name).download_file(object_key, local_path)
+print(f"Fayl '{object_key}' muvaffaqiyatli yuklab olindi va '{local_path}' ga saqlandi.")
