@@ -1,9 +1,9 @@
 import os
 import pyodbc
 import pandas as pd
-from minio import Minio
-from minio.error import S3Error
 from concurrent.futures import ThreadPoolExecutor
+import boto3
+from botocore.client import Config
 
 server = '192.168.111.14'
 database = 'CottonDb'
@@ -23,51 +23,53 @@ conn = pyodbc.connect(conn_str)
 query = """
 SELECT 
     F.[FilePath]
+   ,F.[FileName]
+   ,O.[Name]
 FROM 
     [CottonDb].[dbo].[Files] F
 JOIN 
     [CottonDb].[dbo].[Organizations] O ON F.OwnerId = O.Id
-
+where 
+	    F.[FilePath] IS NOT NULL or F.[FilePath] LIKE '%.xlsx'
 """
 
 df = pd.read_sql(query, conn)
 conn.close()
 
-file_paths = df['FilePath'].tolist()
+file_paths = df['FilePath'].dropna().tolist()
 
 if not file_paths:
     print("❗ Hech qanday .xlsx fayl topilmadi.")
 else:
     print(f"✅ {len(file_paths)} ta .xlsx fayl topildi.")
 
-client = Minio(
-    endpoint="minio-cdn.uzex.uz",
-    access_key="cotton",
-    secret_key="xV&q+8AHHXBSK}",
-    secure=True
+s3 = boto3.resource(
+    's3',
+    endpoint_url='https://minio-cdn.uzex.uz',
+    aws_access_key_id='cotton',
+    aws_secret_access_key='xV&q+8AHHXBSK}',
+    config=Config(signature_version='s3v4'),
+    region_name='us-east-1'
 )
 
-bucket_name = "cotton"
-local_directory = "downloaded_files"
+bucket_name = 'cotton'
+local_directory = 'downloaded_files'
 
 if not os.path.exists(local_directory):
     os.makedirs(local_directory)
 
-def download_file(object_name):
+def download_file(object_key):
     try:
-        local_file_path = os.path.join(local_directory, os.path.basename(object_name))
-        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-        client.fget_object(bucket_name, object_name, local_file_path)
-        print(f"✅ Yuklandi: {object_name}")
-    except S3Error as e:
-        print(f"❌ Yuklashda xatolik: {object_name} | {e}")
+        file_name = os.path.basename(object_key)
+        local_path = os.path.join(local_directory, file_name)
+        s3.Bucket(bucket_name).download_file(object_key, local_path)
+        print(f"✅ Yuklandi: {object_key}")
+    except Exception as e:
+        print(f"❌ Xatolik: {object_key} | {e}")
 
-xlsx_files = [path for path in file_paths if path.endswith('.xlsx')]
-
-if xlsx_files:
+if file_paths:
     print("🚀 Yuklab olish boshlandi...")
     with ThreadPoolExecutor(max_workers=5) as executor:
-        executor.map(download_file, xlsx_files)
+        executor.map(download_file, file_paths)
 else:
     print("❗ Yuklab olish uchun .xlsx fayllar yo‘q.")
-
