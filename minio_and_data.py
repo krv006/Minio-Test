@@ -70,3 +70,4 @@ if xlsx_files:
         executor.map(download_file, xlsx_files)
 else:
     print("❗ Yuklab olish uchun .xlsx fayllar yo‘q.")
+
