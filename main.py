@@ -30,12 +30,10 @@ if not os.path.exists(local_directory):
     os.makedirs(local_directory)
 
 try:
-    # Prefix bo'yicha fayllarni olish
     objects = client.list_objects(bucket_name, prefix=prefix, recursive=True)
     object_names = [obj.object_name for obj in objects]
 
-    # Parallel yuklash
-    with ThreadPoolExecutor(max_workers=4) as executor:  # 4 ta parallel jarayon
+    with ThreadPoolExecutor(max_workers=4) as executor:
         executor.map(lambda obj_name: download_file(client, bucket_name, obj_name, local_directory), object_names)
 
 except S3Error as err:
