@@ -83,6 +83,6 @@ json ga ogirish kerak boladi -> ular qib beradi
 
 valid invalid tekshirish kerak boladi
 
-absert
+upsert
 
 """
