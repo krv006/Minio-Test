@@ -23,26 +23,24 @@ conn = pyodbc.connect(conn_str)
 
 query = """
 SELECT 
-    F.[FilePath]
-   ,F.[FileName]
-   ,O.[Name]
+    F.[FilePath],
+    F.[FileName],
+    O.[Name] AS OrgName
 FROM 
     [CottonDb].[dbo].[Files] F
 JOIN 
     [CottonDb].[dbo].[Organizations] O ON F.OwnerId = O.Id
-where 
-	    F.[FilePath] IS NOT NULL or F.[FilePath] LIKE '%.xlsx'
+WHERE 
+    F.[FilePath] IS NOT NULL OR F.[FilePath] LIKE '%.xlsx'
 """
 
 df = pd.read_sql(query, conn)
 conn.close()
 
-file_paths = df['FilePath'].dropna().tolist()
-
-if not file_paths:
+if df.empty:
     print("❗ Hech qanday .xlsx fayl topilmadi.")
 else:
-    print(f"✅ {len(file_paths)} ta .xlsx fayl topildi.")
+    print(f"✅ {len(df)} ta .xlsx fayl topildi.")
 
 s3 = boto3.resource(
     's3',
@@ -54,27 +52,35 @@ s3 = boto3.resource(
 )
 
 bucket_name = 'cotton'
-local_directory = 'downloaded_files'
+local_directory = 'Test_File'
 
 if not os.path.exists(local_directory):
     os.makedirs(local_directory)
 
-
-def download_file(object_key):
+def download_file(row):
     try:
-        file_name = os.path.basename(object_key)
-        if not file_name.lower().endswith(".xlsx"):
-            file_name += ".xlsx"
-        local_path = os.path.join(local_directory, file_name)
+        object_key = row["FilePath"]
+        file_name = row["FileName"]
+        org_name = row["OrgName"]
+
+        safe_org = "".join(c for c in org_name if c.isalnum() or c in (" ", "_")).strip().replace(" ", "_")
+        safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+
+        if not safe_file.lower().endswith(".xlsx"):
+            safe_file += ".xlsx"
+
+        new_file_name = f"{safe_org}_{safe_file}"
+        local_path = os.path.join(local_directory, new_file_name)
+
         s3.Bucket(bucket_name).download_file(object_key, local_path)
-        print(f"✅ Yuklandi: {object_key} -> {file_name}")
+        print(f"✅ Yuklandi: {object_key} -> {new_file_name}")
     except Exception as e:
         print(f"❌ Xatolik: {object_key} | {e}")
 
-
-if file_paths:
+if not df.empty:
     print("🚀 Yuklab olish boshlandi...")
+    rows = df.to_dict("records")
     with ThreadPoolExecutor(max_workers=5) as executor:
-        executor.map(download_file, file_paths)
+        executor.map(download_file, rows)
 else:
-    print("❗ Yuklab olish uchun .xlsx fayllar yo‘q.")
+    print("❗ Yuklab olish uchun fayl yo‘q.")
