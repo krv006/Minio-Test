@@ -1,8 +1,9 @@
 import os
-import pyodbc
-import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
+
 import boto3
+import pandas as pd
+import pyodbc
 from botocore.client import Config
 
 server = '192.168.111.14'
@@ -58,6 +59,7 @@ local_directory = 'downloaded_files'
 if not os.path.exists(local_directory):
     os.makedirs(local_directory)
 
+
 def download_file(object_key):
     try:
         file_name = os.path.basename(object_key)
@@ -67,6 +69,7 @@ def download_file(object_key):
     except Exception as e:
         print(f"❌ Xatolik: {object_key} | {e}")
 
+
 if file_paths:
     print("🚀 Yuklab olish boshlandi...")
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -74,3 +77,10 @@ if file_paths:
 else:
     print("❗ Yuklab olish uchun .xlsx fayllar yo‘q.")
 
+"""
+
+json ga ogirish kerak boladi -> ular qib beradi
+
+valid invalid tekshirish kerak boladi
+
+"""
