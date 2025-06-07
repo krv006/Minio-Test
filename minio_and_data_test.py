@@ -6,7 +6,6 @@ import pyodbc
 from botocore.client import Config
 from sqlalchemy import create_engine, types
 
-# 1. Ma'lumotlar bazasiga ulanish
 source_server = '192.168.111.14'
 source_database = 'CottonDb'
 username = 'sa'
@@ -44,7 +43,6 @@ if df.empty:
 else:
     print(f"✅ {len(df)} ta .xlsx fayl topildi.")
 
-# 2. MinIO sozlamalari
 s3 = boto3.resource(
     's3',
     endpoint_url='https://minio-cdn.uzex.uz',
@@ -65,20 +63,11 @@ def download_file(row):
     org_name = row["OrgName"]
 
     try:
-        # Tashkilot nomini tozalash
         safe_org = "".join(c for c in org_name if c.isalnum() or c in (" ", "_")).strip().replace(" ", "_")
-
-        # Fayl nomini tozalash
         safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
-
-        # Kengaytmani to'g'rilash
         safe_file = safe_file.lower().replace(".xlsx", "").replace("xlsx", "").strip("_")
-
-        # Standart .xlsx kengaytmasini qo'shish
         new_file_name = f"{safe_org}_{safe_file}.xlsx"
         local_path = os.path.join(local_directory, new_file_name)
-
-        # MinIO dan faylni yuklab olish
         s3.Bucket(bucket_name).download_file(object_key, local_path)
         print(f"✅ Yuklandi: {object_key} -> {new_file_name}")
         return new_file_name
@@ -87,7 +76,6 @@ def download_file(row):
         return None
 
 
-# 4. Fayllarni parallel yuklab olish
 print("🚀 Yuklab olish boshlandi...")
 rows = df.to_dict("records")
 downloaded_files = []
@@ -103,7 +91,6 @@ if not downloaded_files:
     print("❌ Hech qanday fayl yuklanmadi.")
     exit()
 
-# 5. Ma'lumotlar bazasidagi barcha jadvallarni o'chirish
 target_database = 'Test_Xlsx_File'
 target_conn_str = f"""
     DRIVER={driver};
@@ -117,11 +104,9 @@ try:
     conn = pyodbc.connect(target_conn_str)
     cursor = conn.cursor()
 
-    # Barcha jadvallarni olish
     cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo'")
     tables = [row[0] for row in cursor.fetchall()]
 
-    # Har bir jadvalni o'chirish
     for table in tables:
         cursor.execute(f"DROP TABLE [dbo].[{table}]")
         print(f"🗑 Jadval o'chirildi: {table}")
@@ -133,7 +118,6 @@ except Exception as e:
     print(f"❌ Jadvallarni o'chirishda xatolik: {e}")
     exit()
 
-# 6. Ma'lumotlar bazasiga yozish (bo‘sh fayllarni o‘tkazib yuborish)
 engine = create_engine(
     f"mssql+pyodbc://{username}:{password}@{source_server}/{target_database}?driver=ODBC+Driver+17+for+SQL+Server"
 )
@@ -152,8 +136,7 @@ for file_name in downloaded_files:
         df_xlsx = xl.parse(xl.sheet_names[0])
         if df_xlsx.empty:
             print(f"⚠️ Bo‘sh fayl: {file_name}")
-            continue  # Bo‘sh faylni bazaga yozmaymiz
-
+            continue
         df_xlsx.columns = [str(col).strip().replace(' ', '_') for col in df_xlsx.columns]
 
         dtype_mapping = {}
