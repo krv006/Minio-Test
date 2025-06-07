@@ -1,33 +1,32 @@
 import os
-from concurrent.futures import ThreadPoolExecutor
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
 import pandas as pd
 import pyodbc
 from botocore.client import Config
 from sqlalchemy import create_engine, types
 
-
-server = '192.168.111.14'
-database = 'CottonDb'
+# 1. Ma'lumotlar bazasiga ulanish
+source_server = '192.168.111.14'
+source_database = 'CottonDb'
 username = 'sa'
 password = 'AX8wFfMQrR6b9qdhHt2eYS'
 driver = '{ODBC Driver 17 for SQL Server}'
 
-conn_str = f"""
+source_conn_str = f"""
     DRIVER={driver};
-    SERVER={server};
-    DATABASE={database};
+    SERVER={source_server};
+    DATABASE={source_database};
     UID={username};
     PWD={password};
 """
-conn = pyodbc.connect(conn_str)
+conn = pyodbc.connect(source_conn_str)
 
 query = """
 SELECT 
     F.[FilePath],
     F.[FileName],
-    O.[Name]
+    O.[Name] AS OrgName
 FROM 
     [CottonDb].[dbo].[Files] F
 JOIN 
@@ -39,18 +38,13 @@ WHERE
 df = pd.read_sql(query, conn)
 conn.close()
 
-df['CustomFileName'] = (
-        df['Name'].str.replace(r'[\\/*?:"<>|]', '_', regex=True) + '_' +
-        df['FileName'].str.replace(r'[\\/*?:"<>|]', '_', regex=True)
-)
-
-file_info = df[['FilePath', 'CustomFileName']].dropna().values.tolist()
-
-if not file_info:
+if df.empty:
     print("❗ Hech qanday .xlsx fayl topilmadi.")
+    exit()
 else:
-    print(f"✅ {len(file_info)} ta .xlsx fayl topildi.")
+    print(f"✅ {len(df)} ta .xlsx fayl topildi.")
 
+# 2. MinIO sozlamalari
 s3 = boto3.resource(
     's3',
     endpoint_url='https://minio-cdn.uzex.uz',
@@ -61,44 +55,104 @@ s3 = boto3.resource(
 )
 
 bucket_name = 'cotton'
-local_directory = 'Test_File'
-
+local_directory = 'downloaded_files'
 os.makedirs(local_directory, exist_ok=True)
 
 
+def download_file(row):
+    object_key = row["FilePath"]
+    file_name = row["FileName"]
+    org_name = row["OrgName"]
 
-def download_and_save_file(item):
-    object_key, file_name = item
     try:
-        local_path = os.path.join(local_directory, file_name)
+        # Tashkilot nomini tozalash
+        safe_org = "".join(c for c in org_name if c.isalnum() or c in (" ", "_")).strip().replace(" ", "_")
+
+        # Fayl nomini tozalash
+        safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+
+        # Kengaytmani to'g'rilash
+        safe_file = safe_file.lower().replace(".xlsx", "").replace("xlsx", "").strip("_")
+
+        # Standart .xlsx kengaytmasini qo'shish
+        new_file_name = f"{safe_org}_{safe_file}.xlsx"
+        local_path = os.path.join(local_directory, new_file_name)
+
+        # MinIO dan faylni yuklab olish
         s3.Bucket(bucket_name).download_file(object_key, local_path)
-        print(f"✅ Yuklandi: {object_key} -> {file_name}")
+        print(f"✅ Yuklandi: {object_key} -> {new_file_name}")
+        return new_file_name
     except Exception as e:
-        print(f"❌ Yuklashda xatolik: {object_key} | {e}")
+        print(f"❌ Xatolik: {object_key} | {e}")
+        return None
 
 
-print("🚀 Fayllarni yuklab olish boshlandi...")
+# 4. Fayllarni parallel yuklab olish
+print("🚀 Yuklab olish boshlandi...")
+rows = df.to_dict("records")
+downloaded_files = []
+
 with ThreadPoolExecutor(max_workers=5) as executor:
-    executor.map(download_and_save_file, file_info)
+    futures = [executor.submit(download_file, row) for row in rows]
+    for future in as_completed(futures):
+        result = future.result()
+        if result:
+            downloaded_files.append(result)
 
+if not downloaded_files:
+    print("❌ Hech qanday fayl yuklanmadi.")
+    exit()
 
+# 5. Ma'lumotlar bazasidagi barcha jadvallarni o'chirish
+target_database = 'Test_Xlsx_File'
+target_conn_str = f"""
+    DRIVER={driver};
+    SERVER={source_server};
+    DATABASE={target_database};
+    UID={username};
+    PWD={password};
+"""
+print("🗑 Barcha jadvallarni o'chirish boshlandi...")
+try:
+    conn = pyodbc.connect(target_conn_str)
+    cursor = conn.cursor()
+
+    # Barcha jadvallarni olish
+    cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo'")
+    tables = [row[0] for row in cursor.fetchall()]
+
+    # Har bir jadvalni o'chirish
+    for table in tables:
+        cursor.execute(f"DROP TABLE [dbo].[{table}]")
+        print(f"🗑 Jadval o'chirildi: {table}")
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+except Exception as e:
+    print(f"❌ Jadvallarni o'chirishda xatolik: {e}")
+    exit()
+
+# 6. Ma'lumotlar bazasiga yozish (bo‘sh fayllarni o‘tkazib yuborish)
 engine = create_engine(
-    f"mssql+pyodbc://{username}:{password}@{server}/{database}?driver=ODBC+Driver+17+for+SQL+Server"
+    f"mssql+pyodbc://{username}:{password}@{source_server}/{target_database}?driver=ODBC+Driver+17+for+SQL+Server"
 )
 
-
-print("🗂 Ma'lumotlarni bazaga joylash boshlandi...")
-
-for _, file_name in file_info:
+print("🗂 Bazaga yozish boshlandi...")
+for file_name in downloaded_files:
     table_name = os.path.splitext(file_name)[0].replace(" ", "_").replace("-", "_")
     local_path = os.path.join(local_directory, file_name)
 
     try:
-        df_xlsx = pd.read_excel(local_path, engine='openpyxl')
+        xl = pd.ExcelFile(local_path, engine='openpyxl')
+        if not xl.sheet_names:
+            print(f"⚠️ Sheet topilmadi: {file_name}")
+            continue
 
+        df_xlsx = xl.parse(xl.sheet_names[0])
         if df_xlsx.empty:
             print(f"⚠️ Bo‘sh fayl: {file_name}")
-            continue
+            continue  # Bo‘sh faylni bazaga yozmaymiz
 
         df_xlsx.columns = [str(col).strip().replace(' ', '_') for col in df_xlsx.columns]
 
@@ -114,29 +168,9 @@ for _, file_name in file_info:
                 dtype_mapping[col] = types.NVARCHAR(length=255)
 
         df_xlsx.to_sql(table_name, con=engine, if_exists='replace', index=False, dtype=dtype_mapping)
-        print(f"Bazaga joylandi: {table_name}")
+        print(f"✅ Bazaga yozildi: {table_name}")
 
     except Exception as e:
-        print(f"Error: {file_name} | {e}")
+        print(f"❌ Bazaga yozishda xatolik: {file_name} | {e}")
 
-print("Done")
-
-
-"""
-
-agar parent id si bolsa 
-10 tasini parent id si bor boladi 
-sort date 
-va the last yuklab yubor 
-parent id boyicha file topish va shu boyicha row di topaman 
-xamma dani ochiraman is_delete = True
-xuddi shu parent_id si bn file update qilib yuboraman
-
-
-2.
-yana bita column qoshib file_id bn parent_id qoyaman
-xar doim null boladi ilida bolmidi 
-
-file_id = file_id
-
-"""
+print("🎉 Tayyor: barcha fayllar bazaga yozildi.")

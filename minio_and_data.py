@@ -59,7 +59,6 @@ local_directory = 'downloaded_files'
 os.makedirs(local_directory, exist_ok=True)
 
 
-# 3. Fayl yuklash funksiyasi
 def download_file(row):
     object_key = row["FilePath"]
     file_name = row["FileName"]
