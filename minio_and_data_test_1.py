@@ -157,3 +157,15 @@ for file_name in downloaded_files:
         print(f"❌ Bazaga yozishda xatolik: {file_name} | {e}")
 
 print("🎉 Tayyor: barcha fayllar bazaga yozildi.")
+
+
+"""
+FileId
+ParentID
+CreatedAt  -> db dan olamiz
+ResevedDate -> db qpshilgan vaqt
+
+IsDel - > Parent ID si bor file keldi parent id boyicha bazaga yozganlarim (File id)
+agar file update bolsa IsDel -> TRUE bolishi kere
+
+"""
