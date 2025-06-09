@@ -88,14 +88,13 @@ if df.empty:
 else:
     print(f"✅ {len(df)} ta .xlsx fayl topildi.")
 
-# 2. MinIO sozlamalari
 try:
     s3 = boto3.resource(
         's3',
         endpoint_url=minio_endpoint,
         aws_access_key_id=minio_access_key,
         aws_secret_access_key=minio_secret_key,
-        config=Config(signature_version='s3v4'),
+        config=Config(signature_version='s3v4', retries={'max_attempts': 3, 'mode': 'standard'}),
         region_name='us-east-1'
     )
     logging.info("MinIO ga ulanish muvaffaqiyatli.")
@@ -107,7 +106,6 @@ except Exception as e:
 os.makedirs(local_directory, exist_ok=True)
 
 
-# 3. Fayl yuklash funksiyasi
 def download_file(row, conn):
     object_key = row["FilePath"]
     file_name = row["FileName"]
@@ -117,20 +115,12 @@ def download_file(row, conn):
     created_at = row["CreatedAt"]
 
     try:
-        # Tashkilot nomini tozalash
         safe_org = "".join(c for c in org_name if c.isalnum() or c in (" ", "_")).strip().replace(" ", "_")
-
-        # Fayl nomini tozalash
         safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
-
-        # Kengaytmani to'g'rilash
         safe_file = safe_file.lower().replace(".xlsx", "").replace("xlsx", "").strip("_")
-
-        # Standart .xlsx kengaytmasini qo'shish
         new_file_name = f"{safe_org}_{safe_file}.xlsx"
         local_path = os.path.join(local_directory, new_file_name)
 
-        # ParentId bo'lsa, mos faylni topish
         parent_file_path = None
         is_updated = False
         if pd.notna(parent_id):
@@ -145,16 +135,16 @@ def download_file(row, conn):
             if result:
                 parent_file_path = result[0]
                 is_updated = True
+            else:
+                logging.warning(f"ParentId {parent_id} uchun fayl topilmadi.")
+                print(f"⚠️ ParentId {parent_id} uchun fayl topilmadi.")
             cursor.close()
 
-        # Faylni yuklab olish
         if parent_file_path:
-            # Parent faylni yuklash (yangilash uchun)
             s3.Bucket(bucket_name).download_file(parent_file_path, local_path)
             logging.info(f"Parent fayl yuklandi: {parent_file_path} -> {new_file_name}")
             print(f"✅ Parent fayl yuklandi: {parent_file_path} -> {new_file_name}")
         else:
-            # ParentId yo'q bo'lsa, o'z faylini yuklash
             s3.Bucket(bucket_name).download_file(object_key, local_path)
             logging.info(f"Yuklandi: {object_key} -> {new_file_name}")
             print(f"✅ Yuklandi: {object_key} -> {new_file_name}")
@@ -164,7 +154,7 @@ def download_file(row, conn):
             'file_id': file_id,
             'parent_id': parent_id,
             'created_at': created_at,
-            'is_updated': is_updated  # Yangilanganligini belgilash
+            'is_updated': is_updated
         }
     except Exception as e:
         logging.error(f"Yuklashda xatolik: {object_key} | {e}")
@@ -172,12 +162,10 @@ def download_file(row, conn):
         return None
 
 
-# 4. Fayllarni parallel yuklab olish
 print("🚀 Yuklab olish boshlandi...")
 rows = df.to_dict("records")
 downloaded_files = []
 
-# MinIO uchun ulanishni ochish
 conn = pyodbc.connect(source_conn_str)
 with ThreadPoolExecutor(max_workers=5) as executor:
     futures = [executor.submit(download_file, row, conn) for row in rows]
@@ -192,7 +180,6 @@ if not downloaded_files:
     print("❌ Hech qanday fayl yuklanmadi.")
     exit()
 
-# 5. Ma'lumotlar bazasidagi barcha jadvallarni o'chirish
 target_conn_str = f"""
     DRIVER={driver};
     SERVER={source_server};
@@ -202,10 +189,9 @@ target_conn_str = f"""
 """
 print("🗑 Barcha jadvallarni o'chirish boshlandi...")
 try:
-    conn = pyodbc.connect(target_conn_str)
+    conn = pyodbc.connect动画
     cursor = conn.cursor()
 
-    # Barcha jadvallarni olish
     cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo'")
     tables = [row[0] for row in cursor.fetchall()]
 
@@ -213,7 +199,6 @@ try:
         logging.info("Ma'lumotlar bazasida jadvallar topilmadi.")
         print("ℹ️ Ma'lumotlar bazasida jadvallar topilmadi.")
 
-    # Har bir jadvalni o'chirish
     for table in tables:
         cursor.execute(f"DROP TABLE [dbo].[{table}]")
         logging.info(f"Jadval o'chirildi: {table}")
@@ -227,13 +212,12 @@ except Exception as e:
     print(f"❌ Jadvallarni o'chirishda xatolik: {e}")
     exit()
 
-# 6. Ma'lumotlar bazasiga yozish (bo‘sh fayllarni o‘tkazib yuborish)
 engine = create_engine(
     f"mssql+pyodbc://{username}:{password}@{source_server}/{target_database}?driver=ODBC+Driver+17+for+SQL+Server"
 )
 
 print("🗂 Bazaga yozish boshlandi...")
-current_date = datetime.now()  # Hozirgi sanani olish
+current_date = datetime.now()
 for file_info in tqdm(downloaded_files, desc="Fayllarni bazaga yozish"):
     file_name = file_info['file_name']
     file_id = file_info['file_id']
@@ -254,16 +238,15 @@ for file_info in tqdm(downloaded_files, desc="Fayllarni bazaga yozish"):
         if df_xlsx.empty:
             logging.warning(f"Bo‘sh fayl: {file_name}")
             print(f"⚠️ Bo‘sh fayl: {file_name}")
-            continue  # Bo‘sh faylni bazaga yozmaymiz
+            continue
 
         df_xlsx.columns = [str(col).strip().replace(' ', '_') for col in df_xlsx.columns]
 
-        # Qo'shimcha ustunlarni qo'shish
         df_xlsx['FileId'] = file_id
         df_xlsx['ParentId'] = parent_id if pd.notna(parent_id) else None
         df_xlsx['CreatedAt'] = created_at
         df_xlsx['ResevedDate'] = current_date
-        df_xlsx['IsDel'] = is_updated  # True agar yangilangan bo'lsa, aks holda False
+        df_xlsx['IsDel'] = is_updated
 
         dtype_mapping = {}
         for col in df_xlsx.columns:
@@ -282,11 +265,12 @@ for file_info in tqdm(downloaded_files, desc="Fayllarni bazaga yozish"):
             else:
                 dtype_mapping[col] = types.NVARCHAR(length=255)
 
-        df_xlsx.to_sql(table_name, con=engine, if_exists='replace', index=False, dtype=dtype_mapping)
+        with engine.connect() as connection:
+            with connection.begin():
+                df_xlsx.to_sql(table_name, con=connection, if_exists='replace', index=False, dtype=dtype_mapping)
         logging.info(f"Bazaga yozildi: {table_name} | FileId: {file_id} | IsDel: {is_updated}")
         print(f"✅ Bazaga yozildi: {table_name}")
 
-        # Faylni o'chirish
         os.remove(local_path)
         logging.info(f"Fayl o'chirildi: {local_path}")
         print(f"🗑 Fayl o'chirildi: {local_path}")
