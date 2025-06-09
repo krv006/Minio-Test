@@ -2,7 +2,6 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-
 import boto3
 import pandas as pd
 import pyodbc
@@ -34,12 +33,12 @@ local_directory = 'downloaded_files'
 
 # 🛠 Bazaga ulanish
 source_conn_str = f"""
-    DRIVER={driver};
-    SERVER={source_server};
-    DATABASE={source_database};
-    UID={username};
-    PWD={password};
-"""
+        DRIVER={driver};
+        SERVER={source_server};
+        DATABASE={source_database};
+        UID={username};
+        PWD={password};
+    """
 try:
     conn = pyodbc.connect(source_conn_str)
     logging.info("Ma'lumotlar bazasiga ulanish muvaffaqiyatli.")
@@ -49,16 +48,16 @@ except Exception as e:
     exit()
 
 query = """
-SELECT 
-    F.[Id] AS FileId, F.[ParentId], F.[CreatedAt], F.[FilePath],
-    F.[FileName], O.[Name] AS OrgName
-FROM 
-    [CottonDb].[dbo].[Files] F
-JOIN 
-    [CottonDb].[dbo].[Organizations] O ON F.OwnerId = O.Id
-WHERE 
-    F.[FilePath] IS NOT NULL OR F.[FilePath] LIKE '%.xlsx'
-"""
+    SELECT 
+        F.[Id] AS FileId, F.[ParentId], F.[CreatedAt], F.[FilePath],
+        F.[FileName], O.[Name] AS OrgName
+    FROM 
+        [CottonDb].[dbo].[Files] F
+    JOIN 
+        [CottonDb].[dbo].[Organizations] O ON F.OwnerId = O.Id
+    WHERE 
+        F.[FilePath] IS NOT NULL OR F.[FilePath] LIKE '%.xlsx'
+    """
 
 df = pd.read_sql(query, conn)
 conn.close()
@@ -81,21 +80,23 @@ s3 = boto3.resource(
 os.makedirs(local_directory, exist_ok=True)
 
 
-# 📥 Fayl yuklash funksiyasi
 def download_file(row):
     object_key = row["FilePath"]
     file_name = row["FileName"]
-    org_name = "".join(c for c in row["OrgName"] if c.isalnum() or c in (" ", "_")).replace(" ", "_")
-    safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).replace(" ", "_").lower().replace(
-        ".xlsx", "")
-    new_file_name = f"{org_name}_{safe_file}_{row['FileId']}.xlsx"
-    local_path = os.path.join(local_directory, new_file_name)
+    org_name = row["OrgName"]
 
     try:
+        safe_org = "".join(c for c in org_name if c.isalnum() or c in (" ", "_")).strip().replace(" ", "_")
+        safe_file = "".join(c for c in file_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+        safe_file = safe_file.lower().replace(".xlsx", "").replace("xlsx", "").strip("_")
+        new_file_name = f"{safe_org}_{safe_file}.xlsx"
+        local_path = os.path.join(local_directory, new_file_name)
         s3.Bucket(bucket_name).download_file(object_key, local_path)
+        print(f"✅ Yuklandi: {object_key} -> {new_file_name}")
+
         return {
             'file_name': new_file_name,
-            'file_id': row["FileId"],
+            'file_id': row["FileId"],  # Fayl ID sini saqlash, lekin ID fayl nomida yo'q
             'parent_id': row["ParentId"],
             'created_at': row["CreatedAt"],
             'is_updated': pd.notna(row["ParentId"])
@@ -105,7 +106,6 @@ def download_file(row):
         return None
 
 
-# 📥 Parallel yuklash
 print("🚀 Fayllarni yuklab olish boshlandi...")
 rows = df.to_dict("records")
 downloaded_files = []
@@ -121,35 +121,50 @@ if not downloaded_files:
     print("❌ Fayllar yuklanmadi.")
     exit()
 
-# 🗑 Eski jadvallarni o‘chirish
 target_conn_str = f"""
-    DRIVER={driver};
-    SERVER={source_server};
-    DATABASE={target_database};
-    UID={username};
-    PWD={password};
-"""
+        DRIVER={driver};
+        SERVER={source_server};
+        DATABASE={target_database};
+        UID={username};
+        PWD={password};
+    """
+
 conn = pyodbc.connect(target_conn_str)
 cursor = conn.cursor()
-cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo'")
-tables = [row[0] for row in cursor.fetchall()]
-for table in tables:
-    cursor.execute(f"DROP TABLE [dbo].[{table}]")
-    print(f"🗑 O‘chirildi: {table}")
-conn.commit()
-cursor.close()
-conn.close()
 
-# 🧠 Bazaga yozish
+
+# Faylni tekshirish va yangilash
+def check_and_update_existing_file(file_info, df_xlsx):
+    cursor.execute(f"SELECT COUNT(1) FROM [dbo].[{file_info['file_name']}] WHERE FileId = ?", file_info["file_id"])
+    exists = cursor.fetchone()[0]
+
+    if exists:
+        print(f"✅ {file_info['file_name']} mavjud. Yangilanmoqda...")
+        cursor.execute(
+            f"UPDATE [dbo].[{file_info['file_name']}] SET {', '.join([f'{col} = ?' for col in df_xlsx.columns])} WHERE FileId = ?",
+            *df_xlsx.values.flatten(), file_info["file_id"])
+    else:
+        print(f"✅ {file_info['file_name']} yangi fayl qo‘shilyapti...")
+        # Yangi fayl qo‘shish
+        df_xlsx.to_sql(
+            file_info['file_name'],
+            con=engine,
+            if_exists='replace',
+            index=False,
+            method='multi',
+            chunksize=1000
+        )
+
+    conn.commit()
+
+
+# Faylni o‘qish va tahrirlash
 engine = create_engine(
     f"mssql+pyodbc://{username}:{password}@{source_server}/{target_database}?driver=ODBC+Driver+17+for+SQL+Server"
 )
-current_date = datetime.now()
 
-print("🗂 Bazaga yozilmoqda...")
 for file_info in tqdm(downloaded_files, desc="Yozilmoqda"):
     file_name = file_info['file_name']
-    table_name = os.path.splitext(file_name)[0].replace(" ", "_").replace("-", "_")
     local_path = os.path.join(local_directory, file_name)
 
     try:
@@ -165,42 +180,8 @@ for file_info in tqdm(downloaded_files, desc="Yozilmoqda"):
 
         df_xlsx.columns = [str(col).strip().replace(' ', '_') for col in df_xlsx.columns]
 
-        # Qo‘shimcha ustunlar
-        df_xlsx['FileId'] = file_info['file_id']
-        df_xlsx['ParentId'] = file_info['parent_id']
-        df_xlsx['CreatedAt'] = file_info['created_at']
-        df_xlsx['ResevedDate'] = current_date
-        df_xlsx['IsDel'] = file_info['is_updated']
-
-        # Dtype mapping
-        dtype_mapping = {}
-        for col in df_xlsx.columns:
-            if col in ['FileId', 'ParentId']:
-                dtype_mapping[col] = types.BIGINT()
-            elif col in ['CreatedAt', 'ResevedDate']:
-                dtype_mapping[col] = types.DateTime()
-            elif col == 'IsDel':
-                dtype_mapping[col] = types.Boolean()
-            elif pd.api.types.is_integer_dtype(df_xlsx[col]):
-                dtype_mapping[col] = types.BIGINT()
-            elif pd.api.types.is_float_dtype(df_xlsx[col]):
-                dtype_mapping[col] = types.Float(precision=18)
-            elif pd.api.types.is_datetime64_any_dtype(df_xlsx[col]):
-                dtype_mapping[col] = types.DateTime()
-            else:
-                dtype_mapping[col] = types.NVARCHAR(length=255)
-
-        # Bazaga yozish
-        df_xlsx.to_sql(
-            table_name,
-            con=engine,
-            if_exists='replace',
-            index=False,
-            dtype=dtype_mapping,
-            method='multi',
-            chunksize=1000
-        )
-        print(f"✅ Yozildi: {table_name}")
+        # Faylni yangilash yoki qo‘shish
+        check_and_update_existing_file(file_info, df_xlsx)
 
     except Exception as e:
         logging.error(f"Yozishda xatolik: {file_name} | {e}")
