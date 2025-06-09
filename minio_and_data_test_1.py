@@ -303,6 +303,7 @@ FileId
 ParentID
 CreatedAt  
 ResevedDate 
+
 IsDel - > Parent ID si bor file keldi parent id boyicha bazaga yozganlarim (File id)
 agar file update bolsa IsDel -> TRUE bolishi kere
 
