@@ -1,15 +1,14 @@
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+
 import boto3
 import pandas as pd
 import pyodbc
 from botocore.client import Config
-from sqlalchemy import create_engine, types
+from sqlalchemy import create_engine
 from tqdm import tqdm
 
-# 🔧 Logging sozlamalari
 logging.basicConfig(
     filename='excel_to_db.log',
     level=logging.INFO,
@@ -17,7 +16,6 @@ logging.basicConfig(
     encoding='utf-8'
 )
 
-# 🔧 To‘g‘ridan-to‘g‘ri sozlamalar
 source_server = '192.168.111.14'
 source_database = 'CottonDb'
 target_database = 'Test_Xlsx_File'
@@ -31,7 +29,6 @@ minio_secret_key = 'xV&q+8AHHXBSK}'
 bucket_name = 'cotton'
 local_directory = 'downloaded_files'
 
-# 🛠 Bazaga ulanish
 source_conn_str = f"""
         DRIVER={driver};
         SERVER={source_server};
@@ -68,7 +65,6 @@ if df.empty:
 else:
     print(f"✅ {len(df)} ta .xlsx fayl topildi.")
 
-# 🔗 MinIO ulanish
 s3 = boto3.resource(
     's3',
     endpoint_url=minio_endpoint,
@@ -96,7 +92,7 @@ def download_file(row):
 
         return {
             'file_name': new_file_name,
-            'file_id': row["FileId"],  # Fayl ID sini saqlash, lekin ID fayl nomida yo'q
+            'file_id': row["FileId"],
             'parent_id': row["ParentId"],
             'created_at': row["CreatedAt"],
             'is_updated': pd.notna(row["ParentId"])
@@ -133,7 +129,6 @@ conn = pyodbc.connect(target_conn_str)
 cursor = conn.cursor()
 
 
-# Faylni tekshirish va yangilash
 def check_and_update_existing_file(file_info, df_xlsx):
     cursor.execute(f"SELECT COUNT(1) FROM [dbo].[{file_info['file_name']}] WHERE FileId = ?", file_info["file_id"])
     exists = cursor.fetchone()[0]
@@ -145,7 +140,6 @@ def check_and_update_existing_file(file_info, df_xlsx):
             *df_xlsx.values.flatten(), file_info["file_id"])
     else:
         print(f"✅ {file_info['file_name']} yangi fayl qo‘shilyapti...")
-        # Yangi fayl qo‘shish
         df_xlsx.to_sql(
             file_info['file_name'],
             con=engine,
@@ -158,7 +152,6 @@ def check_and_update_existing_file(file_info, df_xlsx):
     conn.commit()
 
 
-# Faylni o‘qish va tahrirlash
 engine = create_engine(
     f"mssql+pyodbc://{username}:{password}@{source_server}/{target_database}?driver=ODBC+Driver+17+for+SQL+Server"
 )
@@ -166,23 +159,23 @@ engine = create_engine(
 for file_info in tqdm(downloaded_files, desc="Yozilmoqda"):
     file_name = file_info['file_name']
     local_path = os.path.join(local_directory, file_name)
-
     try:
         xl = pd.ExcelFile(local_path, engine='openpyxl')
         if not xl.sheet_names:
             print(f"⚠️ Sheet topilmadi: {file_name}")
             continue
-
         df_xlsx = xl.parse(xl.sheet_names[0])
         if df_xlsx.empty:
             print(f"⚠️ Bo‘sh fayl: {file_name}")
             continue
-
         df_xlsx.columns = [str(col).strip().replace(' ', '_') for col in df_xlsx.columns]
-
-        # Faylni yangilash yoki qo‘shish
         check_and_update_existing_file(file_info, df_xlsx)
 
     except Exception as e:
         logging.error(f"Yozishda xatolik: {file_name} | {e}")
         print(f"❌ Yozishda xatolik: {file_name} | {e}")
+
+
+"""
+OwnerId ni xam tiqib ketish kere boladi
+"""
